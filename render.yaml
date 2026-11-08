@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: acha-promocoes-oauth
+    runtime: python
+    plan: free
+    branch: main
+
+    buildCommand: pip install -r requirements.txt
+
+    startCommand: gunicorn oauth_callback:app
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: OAUTH_STATE
+        generateValue: true
