@@ -1,7 +1,13 @@
 from collectors.common import coletar_cards_playwright
 
 
-URL_TERABYTE = "https://www.terabyteshop.com.br/promocoes"
+URL_TERABYTE = [
+    "https://www.terabyteshop.com.br/promocoes",
+    "https://www.terabyteshop.com.br/promocoes?pagina=2",
+    "https://www.terabyteshop.com.br/promocoes?pagina=3",
+    "https://www.terabyteshop.com.br/hardware/placas-de-video",
+    "https://www.terabyteshop.com.br/hardware/processadores",
+]
 BASE_URL = "https://www.terabyteshop.com.br"
 
 

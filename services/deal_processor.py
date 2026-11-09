@@ -1,6 +1,7 @@
-from services.category_classifier import identificar_categoria
+from services.category_classifier import eh_tecnologia, identificar_categoria
 from services.channel_router import escolher_canal
 from services.deal_score import analisar_oferta
+from services.afiliados import aplicar_afiliado
 from services.alertas import notificar_alertas
 from services.discord_sender import enviar_oferta
 
@@ -55,6 +56,14 @@ async def processar_produto(bot, produto):
             }
 
     # ========================================================
+    # 1.1 LINK DE AFILIADO
+    # ========================================================
+
+    # url -> link publicado (afiliado quando existir);
+    # url_original -> chave estável de histórico e anti-duplicação.
+    produto = aplicar_afiliado(produto)
+
+    # ========================================================
     # 2. IDENTIFICAR CATEGORIA
     # ========================================================
 
@@ -63,6 +72,15 @@ async def processar_produto(bot, produto):
     )
 
     produto["categoria"] = categoria
+
+    # Nicho: 'outros' só passa se for produto de tecnologia.
+    if categoria == "outros" and not eh_tecnologia(produto["nome"]):
+        print(
+            f"🚫 Fora do nicho de tecnologia: "
+            f"{produto['nome'][:60]}"
+        )
+
+        return {"status": "fora_do_nicho"}
 
     print(
         f"🔎 Categoria identificada: "
@@ -288,13 +306,20 @@ async def processar_produto(bot, produto):
     # 6. SALVAR PRODUTO NO HISTÓRICO
     # ========================================================
 
+    # Chave estável do produto: a URL original (o link de afiliado
+    # pode mudar quando a conversão termina). O Discord usa oferta["url"].
+    chave_url = oferta.get("url_original") or oferta["url"]
+
     salvar_produto(
         nome=oferta["nome"],
         categoria=oferta["categoria"],
         loja=oferta["loja"],
         preco_anterior=preco_anterior,
         preco_atual=preco_atual,
-        url=oferta["url"],
+        url=chave_url,
+        url_afiliado=(
+            oferta["url"] if oferta["url"] != chave_url else None
+        ),
         imagem_url=oferta.get(
             "imagem"
         ),
@@ -325,7 +350,7 @@ async def processar_produto(bot, produto):
     # ========================================================
 
     if oferta_ja_publicada(
-        oferta["url"],
+        chave_url,
         preco_atual
     ):
         print(
@@ -345,6 +370,18 @@ async def processar_produto(bot, produto):
     canal_id = escolher_canal(
         oferta["categoria"]
     )
+
+    if canal_id is None:
+        print(
+            f"⏸️ Sem canal configurado para "
+            f"'{oferta['categoria']}' (defina CANAL_PC no .env): "
+            f"{oferta['nome'][:60]}"
+        )
+
+        return {
+            "status": "sem_canal",
+            "oferta": oferta
+        }
 
     print(
         f"📡 Canal escolhido: "
@@ -378,7 +415,7 @@ async def processar_produto(bot, produto):
 
     registrar_oferta_publicada(
         nome=oferta["nome"],
-        url=oferta["url"],
+        url=chave_url,
         preco=preco_atual,
         canal_id=canal_id
     )

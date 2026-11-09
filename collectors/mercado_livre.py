@@ -544,6 +544,9 @@ def melhor_oferta_do_produto(
 # CONSULTAR DETALHES DO ANÚNCIO
 # ============================================================
 
+ITENS_BLOQUEADOS = False
+
+
 def consultar_item(
     cliente,
     item_id,
@@ -553,15 +556,34 @@ def consultar_item(
     título, permalink, imagem e condição.
     """
 
+    global ITENS_BLOQUEADOS
+
+    # /items/{id} costuma retornar 403 para apps sem permissão.
+    # Depois da primeira recusa não insistimos: os dados do catálogo
+    # (título, imagem, preços) são suficientes.
+    if ITENS_BLOQUEADOS:
+        return {}
+
     url = (
         f"{API_BASE_URL}/items/"
         f"{item_id}"
     )
 
-    return cliente.get(
+    detalhes = cliente.get(
         url,
         ignorar_403=True,
     )
+
+    if detalhes is None:
+        ITENS_BLOQUEADOS = True
+        print(
+            "ℹ️ /items/{id} indisponível (403); usando só "
+            "os dados do catálogo."
+        )
+
+        return {}
+
+    return detalhes
 
 
 # ============================================================
@@ -648,6 +670,15 @@ def normalizar_produto(
     url_original = item_detalhes.get(
         "permalink"
     )
+
+    # Sem o anúncio individual: página do produto de catálogo,
+    # já filtrada para o anúncio escolhido.
+    if not url_original and produto_catalogo.get("id") and item_id:
+        url_original = (
+            "https://www.mercadolivre.com.br/p/"
+            f"{produto_catalogo['id']}"
+            f"?pdp_filters=item_id:{item_id}"
+        )
 
     condicao = item_detalhes.get(
         "condition"
@@ -825,8 +856,7 @@ def processar_produto_catalogo(
         item_id,
     )
 
-    if not item_detalhes:
-        return None
+    item_detalhes = item_detalhes or {}
 
     nome_validacao = (
         item_detalhes.get("title")

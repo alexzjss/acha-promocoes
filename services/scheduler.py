@@ -1,16 +1,18 @@
 import asyncio
 import importlib
 import os
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from collectors import COLETORES
+from services.afiliados_conversor import converter_pendentes
 from services.deal_processor import processar_produto
 
 
 scheduler = AsyncIOScheduler()
 
-LIMITE_POR_LOJA = 20
+LIMITE_POR_LOJA = 80
 
 
 def carregar_coletor(caminho):
@@ -50,12 +52,24 @@ async def verificar_ofertas(bot):
         "rejeitada": 0,
         "descartada": 0,
         "erro": 0,
+        "afiliados": 0,
     }
 
     for nome, caminho in COLETORES:
         produtos = await coletar_loja(nome, caminho)
 
         contadores["coletadas"] += len(produtos)
+
+        # Converte links de afiliado pendentes antes de publicar
+        # (o processador relê a fila e usa o link convertido).
+        if produtos:
+            try:
+                conversao = await converter_pendentes(limite=20)
+
+                contadores["afiliados"] += conversao["convertidos"]
+
+            except Exception as erro:
+                print(f"⚠️ Erro convertendo links de afiliado: {erro}")
 
         for produto in produtos:
             try:
@@ -79,6 +93,8 @@ async def verificar_ofertas(bot):
                 "preco_invalido",
                 "desconto_insuficiente",
                 "preco_suspeito",
+                "fora_do_nicho",
+                "sem_canal",
             ):
                 contadores["descartada"] += 1
 
@@ -96,6 +112,7 @@ async def verificar_ofertas(bot):
     print(f"⏭️ Duplicadas: {contadores['duplicada']}")
     print(f"❌ Rejeitadas (score): {contadores['rejeitada']}")
     print(f"🚫 Descartadas (preço): {contadores['descartada']}")
+    print(f"🔗 Links de afiliado convertidos: {contadores['afiliados']}")
     print(f"⚠️ Erros: {contadores['erro']}")
     print("-" * 60)
     print("✅ VERIFICAÇÃO FINALIZADA")
@@ -114,6 +131,9 @@ def iniciar_scheduler(bot):
         verificar_ofertas,
         trigger="interval",
         minutes=INTERVALO_MINUTOS,
+        # Primeira coleta logo ao iniciar (senão o banco/ranking
+        # ficaria vazio até o primeiro intervalo).
+        next_run_time=datetime.now(),
         args=[bot],
         id="verificar_ofertas",
         replace_existing=True,

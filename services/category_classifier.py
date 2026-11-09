@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from services.filtro_tecnologia import encontrar_termo_bloqueado
+
 
 def normalizar_texto(texto):
     texto = str(texto).lower().strip()
@@ -32,8 +34,35 @@ def contem_algum(texto, termos):
     return any(contem_termo(texto, termo) for termo in termos)
 
 
+# PCs completos (desktops, mini PCs, kits de upgrade). A regra é ancorada
+# no início do nome: "Fonte ... para Computador" não é um PC.
+PREFIXOS_PC = [
+    "pc ",
+    "computador",
+    "desktop",
+    "mini pc",
+    "all in one",
+    "workstation",
+    "kit upgrade",
+    "kit montado",
+    "kit processador",
+]
+
+
+def eh_pc(nome_normalizado):
+    return any(nome_normalizado.startswith(p) for p in PREFIXOS_PC)
+
+
 def identificar_categoria(nome_produto):
     nome = normalizar_texto(nome_produto)
+
+    # =========================================================
+    # PC COMPLETO (antes dos componentes: o nome de um PC cita
+    # placa de vídeo, processador, memória...)
+    # =========================================================
+
+    if eh_pc(nome):
+        return "pc"
 
     # =========================================================
     # PLACA DE VIDEO
@@ -196,7 +225,11 @@ def identificar_categoria(nome_produto):
         "cooler gamer",
         "cooler",
         "ventoinha",
+        "ventoinhas",
         "kit ventoinha",
+        "kit ventoinhas",
+        "kit fan",
+        "controladora fan",
         "fan para gabinete",
         "fan gabinete",
         "case fan",
@@ -311,6 +344,74 @@ def identificar_categoria(nome_produto):
     # =========================================================
 
     return "outros"
+
+
+# =============================================================
+# NICHO: o que conta como "tecnologia" dentro de 'outros'
+# =============================================================
+
+TERMOS_TECNOLOGIA = [
+    # computadores e telas
+    "notebook", "laptop", "computador", "pc gamer", "mini pc", "all in one",
+    "tablet", "ipad", "monitor", "projetor", "tv", "smart tv", "televisao",
+    "tela secundaria", "mesa digitalizadora",
+    # celulares e wearables
+    "celular", "smartphone", "iphone", "galaxy", "xiaomi", "motorola",
+    "smartwatch", "relogio inteligente", "pulseira inteligente",
+    "carregador", "power bank", "powerbank", "cabo usb", "cabo type c",
+    "fone de ouvido", "fone bluetooth", "earbuds", "airpods",
+    # games
+    "playstation", "ps5", "ps4", "xbox", "nintendo", "switch", "dualsense",
+    "joystick", "controle sem fio", "gamepad", "console",
+    # periféricos e áudio
+    "teclado", "mouse", "mousepad", "headset", "webcam", "microfone",
+    "caixa de som", "soundbar", "gamer",
+    # rede e conectividade
+    "roteador", "repetidor", "wi fi", "wifi", "mesh", "access point",
+    "switch de rede", "hub usb", "adaptador", "cabo hdmi",
+    "cabo displayport", "pci express", "riser", "placa de rede",
+    # armazenamento
+    "pendrive", "cartao de memoria", "micro sd", "hd externo", "ssd", "nvme",
+    # periféricos de escritório e energia
+    "impressora", "scanner", "nobreak", "estabilizador",
+    # casa inteligente
+    "tomada inteligente", "lampada inteligente", "camera ip",
+    "camera de seguranca", "alexa", "echo dot", "fire tv", "chromecast",
+    "robo aspirador", "kindle", "fechadura digital", "controladora",
+    # software
+    "antivirus", "kaspersky", "windows", "licenca", "office 365",
+    # fãs/colecionáveis geek (já são categoria própria, mas ficam no nicho)
+    "funko", "action figure",
+]
+
+# Termos que, mesmo com palavra de tecnologia, indicam outro tipo de item.
+TERMOS_EXCLUIDOS = [
+    "cadeira de escritorio", "cadeira escritorio", "ventilador",
+    "protetor solar", "shampoo", "creme", "sabonete", "desodorante",
+    "parafusadeira", "furadeira", "ferramentas", "mesa para computador",
+]
+
+
+def eh_tecnologia(nome_produto):
+    """
+    True se o produto pertence ao nicho de tecnologia: ou tem categoria
+    específica, ou contém algum termo de tecnologia.
+    """
+
+    nome = normalizar_texto(nome_produto)
+
+    # Lista de bloqueio completa (moda, beleza, casa...) mantida em
+    # services/filtro_tecnologia.py, compartilhada com o coletor do ML.
+    if encontrar_termo_bloqueado(nome_produto):
+        return False
+
+    if identificar_categoria(nome_produto) != "outros":
+        return True
+
+    if contem_algum(nome, TERMOS_EXCLUIDOS):
+        return False
+
+    return contem_algum(nome, TERMOS_TECNOLOGIA)
 
 
 if __name__ == "__main__":

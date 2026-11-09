@@ -40,6 +40,7 @@ ROTULOS_PERIODO = {
 }
 
 CATEGORIAS = [
+    "pc",
     "placa_video",
     "processador",
     "placa_mae",
@@ -74,6 +75,25 @@ def brl(valor):
     texto = f"{valor:,.2f}"
 
     return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def historico(item):
+    """Compara o preço atual com o histórico registrado pelo bot."""
+
+    if item.get("observacoes", 0) < 2:
+        return ""
+
+    menor = item["menor_preco"]
+    maior = item["maior_preco"]
+
+    # Preço nunca mudou desde a primeira coleta: nada a afirmar.
+    if maior == menor:
+        return ""
+
+    if item["preco_atual"] <= menor:
+        return f"\n🏅 **menor preço já registrado** (já esteve {brl(maior)})"
+
+    return f"\n📊 menor preço visto: {brl(menor)}"
 
 
 def montar_embed(estado, total, linhas):
@@ -117,12 +137,12 @@ def montar_embed(estado, total, linhas):
         linhas, start=pagina * POR_PAGINA + 1
     ):
         blocos.append(
-            f"**{posicao}. [{item['nome'][:90]}]({item['url']})**\n"
+            f"**{posicao}. [{item['nome'][:90]}]({item.get('link') or item['url']})**\n"
             f"🏬 {item['loja']} • ~~{brl(item['preco_anterior'])}~~ → "
             f"**{brl(item['preco_atual'])}**\n"
             f"📉 **{item['desconto_pct']:.1f}% OFF** • "
             f"💸 economia {brl(item['economia'])} • "
-            f"⭐ {item['score']}/100"
+            f"⭐ {item['score']}/100{historico(item)}"
         )
 
     embed.description = "\n\n".join(blocos)
@@ -142,6 +162,7 @@ def consultar(estado):
         periodo=estado["periodo"],
         limite=POR_PAGINA,
         offset=estado["pagina"] * POR_PAGINA,
+        excluir_outros=False,
     )
 
 
