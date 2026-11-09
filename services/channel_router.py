@@ -1,4 +1,20 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Carrega o .env antes de ler CANAL_PC (este módulo pode ser importado
+# antes do load_dotenv() do bot).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 CANAL_TESTE = 1565001094759714988
+
+
+def _canal_env(nome):
+    valor = os.getenv(nome, "").strip()
+
+    return int(valor) if valor.isdigit() else None
+
 
 CANAIS = {
     "monitor": 1565061780512964798,
@@ -14,7 +30,11 @@ CANAIS = {
     # Novas categorias
     "cooler": 1569121306069303317,
     "gabinete": 1569121326034321519,
-    "outros": 1565001094759714988
+    "outros": 1565001094759714988,
+
+    # PCs completos: informe o ID em CANAL_PC no .env (ou aqui).
+    # Enquanto estiver vazio, os PCs não são publicados.
+    "pc": _canal_env("CANAL_PC"),
 }
 
 
@@ -88,6 +108,11 @@ def escolher_canal(categoria):
         "fan": "cooler",
         "fans": "cooler",
         "ventoinha": "cooler",
+
+        # PCs completos
+        "pc": "pc",
+        "pcs": "pc",
+        "computador": "pc",
 
         # Gabinetes
         "case": "gabinete",

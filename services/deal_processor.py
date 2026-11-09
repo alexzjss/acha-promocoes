@@ -371,6 +371,18 @@ async def processar_produto(bot, produto):
         oferta["categoria"]
     )
 
+    if canal_id is None:
+        print(
+            f"⏸️ Sem canal configurado para "
+            f"'{oferta['categoria']}' (defina CANAL_PC no .env): "
+            f"{oferta['nome'][:60]}"
+        )
+
+        return {
+            "status": "sem_canal",
+            "oferta": oferta
+        }
+
     print(
         f"📡 Canal escolhido: "
         f"{canal_id}"

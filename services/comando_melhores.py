@@ -40,6 +40,7 @@ ROTULOS_PERIODO = {
 }
 
 CATEGORIAS = [
+    "pc",
     "placa_video",
     "processador",
     "placa_mae",

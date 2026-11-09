@@ -34,8 +34,35 @@ def contem_algum(texto, termos):
     return any(contem_termo(texto, termo) for termo in termos)
 
 
+# PCs completos (desktops, mini PCs, kits de upgrade). A regra é ancorada
+# no início do nome: "Fonte ... para Computador" não é um PC.
+PREFIXOS_PC = [
+    "pc ",
+    "computador",
+    "desktop",
+    "mini pc",
+    "all in one",
+    "workstation",
+    "kit upgrade",
+    "kit montado",
+    "kit processador",
+]
+
+
+def eh_pc(nome_normalizado):
+    return any(nome_normalizado.startswith(p) for p in PREFIXOS_PC)
+
+
 def identificar_categoria(nome_produto):
     nome = normalizar_texto(nome_produto)
+
+    # =========================================================
+    # PC COMPLETO (antes dos componentes: o nome de um PC cita
+    # placa de vídeo, processador, memória...)
+    # =========================================================
+
+    if eh_pc(nome):
+        return "pc"
 
     # =========================================================
     # PLACA DE VIDEO
