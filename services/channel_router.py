@@ -32,9 +32,8 @@ CANAIS = {
     "gabinete": 1569121326034321519,
     "outros": 1565001094759714988,
 
-    # PCs completos: informe o ID em CANAL_PC no .env (ou aqui).
-    # Enquanto estiver vazio, os PCs não são publicados.
-    "pc": _canal_env("CANAL_PC"),
+    # PCs completos. CANAL_PC no .env sobrescreve este ID.
+    "pc": _canal_env("CANAL_PC") or 1569455971619569684,
 }
 
 
