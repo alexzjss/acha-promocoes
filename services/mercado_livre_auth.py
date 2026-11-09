@@ -1,13 +1,14 @@
 import os
+from pathlib import Path
+
 import requests
 
 from dotenv import load_dotenv, set_key
 
 
-load_dotenv()
+ENV_FILE = str(Path(__file__).resolve().parent.parent / ".env")
 
-
-ENV_FILE = ".env"
+load_dotenv(ENV_FILE)
 
 CLIENT_ID = os.getenv("ML_CLIENT_ID")
 CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET")

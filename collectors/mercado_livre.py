@@ -1,13 +1,11 @@
+import asyncio
 import sys
+import threading
 import time
 from pathlib import Path
 
 import requests
 
-
-# ============================================================
-# GARANTIR ACESSO À RAIZ DO PROJETO
-# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -15,9 +13,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 
+from collectors.common import calcular_desconto, validar_precos
 from services.mercado_livre_auth import (
     obter_access_token,
-    renovar_access_token
+    renovar_access_token,
 )
 
 
@@ -26,22 +25,15 @@ from services.mercado_livre_auth import (
 # ============================================================
 
 SITE_ID = "MLB"
-
 API_BASE_URL = "https://api.mercadolibre.com"
-
-SEARCH_URL = (
-    f"{API_BASE_URL}/sites/{SITE_ID}/search"
-)
+SEARCH_URL = f"{API_BASE_URL}/sites/{SITE_ID}/search"
 
 TIMEOUT = 30
-
 LIMITE_POR_BUSCA = 10
 
-INTERVALO_REQUISICOES = 0.25
-
-
-# Termos usados para encontrar produtos
-# das categorias do seu Discord.
+# Requisições simultâneas à API (respeita o rate limit do ML).
+CONCORRENCIA = 4
+TENTATIVAS = 3
 
 TERMOS_BUSCA = [
     "placa de video",
@@ -61,535 +53,324 @@ TERMOS_BUSCA = [
     "headset gamer",
     "cadeira gamer",
     "action figure",
-    "funko pop"
+    "funko pop",
 ]
 
 
+class AcessoNegado(Exception):
+    """A API recusou o acesso (HTTP 403): abortar a coleta."""
+
+
 # ============================================================
-# CRIAR SESSÃO HTTP
+# CLIENTE HTTP (síncrono, executado em threads)
 # ============================================================
 
-def criar_sessao(access_token):
+class ClienteML:
+    """
+    Faz GETs autenticados. Em HTTP 401 renova o token uma única vez
+    (mesmo com várias threads batendo ao mesmo tempo) e repete.
+    Em 429/5xx repete com backoff exponencial.
+    """
 
-    sessao = requests.Session()
+    def __init__(self, access_token):
+        self.access_token = access_token
+        self._lock = threading.Lock()
 
-    sessao.headers.update(
-        {
-            "Authorization": (
-                f"Bearer {access_token}"
-            ),
+    def _headers(self):
+        return {
+            "Authorization": f"Bearer {self.access_token}",
             "Accept": "application/json",
-            "User-Agent": (
-                "Acha-Promocoes/1.0 "
-                "(Discord promotion bot)"
-            )
+            "User-Agent": "Acha-Promocoes/1.0 (Discord promotion bot)",
         }
-    )
 
-    return sessao
+    def _renovar(self, token_usado):
+        with self._lock:
+            # Outra thread já renovou enquanto esperávamos o lock.
+            if self.access_token != token_usado:
+                return True
 
+            novo = renovar_access_token()
 
-# ============================================================
-# NORMALIZAR IMAGEM
-# ============================================================
+            if not novo:
+                return False
 
-def normalizar_imagem(url):
+            self.access_token = novo
+            return True
 
-    if not url:
+    def get(self, url, parametros=None):
+        """
+        Retorna o JSON da resposta ou None em caso de falha.
+        Levanta AcessoNegado em HTTP 403.
+        """
+
+        renovou = False
+
+        for tentativa in range(TENTATIVAS):
+            token = self.access_token
+
+            try:
+                resposta = requests.get(
+                    url,
+                    params=parametros,
+                    headers=self._headers(),
+                    timeout=TIMEOUT,
+                )
+
+            except requests.RequestException as erro:
+                print(f"❌ Erro de rede no Mercado Livre: {erro}")
+                resposta = None
+
+            if resposta is not None:
+                status = resposta.status_code
+
+                if status == 200:
+                    try:
+                        return resposta.json()
+
+                    except ValueError:
+                        print(f"❌ JSON inválido em {url}")
+                        return None
+
+                if status == 401 and not renovou:
+                    renovou = True
+                    print("⚠️ HTTP 401 no Mercado Livre. Renovando token...")
+
+                    if self._renovar(token):
+                        continue
+
+                    return None
+
+                if status == 403:
+                    raise AcessoNegado(url)
+
+                if status not in (429, 500, 502, 503, 504):
+                    # 404 (item sem preço promocional) e afins não valem retry.
+                    if status != 404:
+                        print(f"⚠️ HTTP {status} em {url}")
+
+                    return None
+
+            if tentativa < TENTATIVAS - 1:
+                time.sleep(2 ** tentativa)
+
         return None
 
-    if url.startswith("http://"):
-        return url.replace(
-            "http://",
-            "https://",
-            1
-        )
-
-    return url
-
 
 # ============================================================
-# VALIDAR VALOR
+# FUNÇÕES AUXILIARES
 # ============================================================
 
 def converter_numero(valor):
-
-    if valor is None:
-        return None
-
     try:
-        return float(valor)
+        return float(valor) if valor is not None else None
 
     except (TypeError, ValueError):
         return None
 
 
-# ============================================================
-# FAZER GET COM RENOVAÇÃO DE TOKEN
-# ============================================================
+def normalizar_imagem(url):
+    if url and url.startswith("http://"):
+        return "https://" + url[len("http://"):]
 
-def fazer_get(
-    sessao,
-    url,
-    parametros=None
-):
+    return url or None
+
+
+def precos_do_resultado(item):
     """
-    Executa uma requisição autenticada.
-
-    Se receber HTTP 401:
-    1. Renova o Access Token.
-    2. Atualiza o header.
-    3. Repete a requisição uma vez.
+    O resultado da busca já traz `price` e, em itens em promoção,
+    `original_price`. Evita uma chamada extra por item.
     """
 
-    try:
-        resposta = sessao.get(
-            url,
-            params=parametros,
-            timeout=TIMEOUT
-        )
+    atual = converter_numero(item.get("price"))
+    anterior = converter_numero(item.get("original_price"))
 
-    except requests.RequestException as erro:
+    if atual and anterior and anterior > atual:
+        return anterior, atual
 
-        print(
-            f"❌ Erro consultando Mercado Livre: "
-            f"{erro}"
-        )
-
-        return None
-
-    if resposta.status_code != 401:
-        return resposta
-
-    print(
-        "⚠️ Mercado Livre retornou HTTP 401."
-    )
-
-    print(
-        "🔄 Tentando renovar o Access Token..."
-    )
-
-    novo_token = renovar_access_token()
-
-    if not novo_token:
-
-        print(
-            "❌ Não foi possível renovar "
-            "o Access Token."
-        )
-
-        return resposta
-
-    sessao.headers.update(
-        {
-            "Authorization": (
-                f"Bearer {novo_token}"
-            )
-        }
-    )
-
-    try:
-        return sessao.get(
-            url,
-            params=parametros,
-            timeout=TIMEOUT
-        )
-
-    except requests.RequestException as erro:
-
-        print(
-            "❌ Erro repetindo requisição "
-            f"ao Mercado Livre: {erro}"
-        )
-
-        return None
+    return None
 
 
-# ============================================================
-# BUSCAR ITENS POR TERMO
-# ============================================================
-
-def buscar_itens_por_termo(
-    sessao,
-    termo,
-    limite=LIMITE_POR_BUSCA
-):
+def consultar_preco_item(cliente, item_id):
     """
-    Busca anúncios no Mercado Livre
-    utilizando palavras-chave.
+    Fallback: consulta /items/{id}/sale_price.
+    Retorna (preco_anterior, preco_atual) ou None.
     """
 
-    parametros = {
-        "q": termo,
-        "limit": limite,
-        "offset": 0
-    }
-
-    resposta = fazer_get(
-        sessao,
-        SEARCH_URL,
-        parametros
+    dados = cliente.get(
+        f"{API_BASE_URL}/items/{item_id}/sale_price",
+        {"context": "channel_marketplace"},
     )
 
-    if resposta is None:
-        return []
-
-    if resposta.status_code != 200:
-
-        print(
-            f"❌ Busca '{termo}' retornou "
-            f"HTTP {resposta.status_code}"
-        )
-
-        try:
-            erro = resposta.json()
-
-            print(
-                f"   Erro: "
-                f"{erro.get('error')}"
-            )
-
-            print(
-                f"   Mensagem: "
-                f"{erro.get('message')}"
-            )
-
-        except ValueError:
-            pass
-
-        return []
-
-    try:
-        dados = resposta.json()
-
-    except ValueError:
-
-        print(
-            f"❌ JSON inválido na busca: "
-            f"{termo}"
-        )
-
-        return []
-
-    resultados = dados.get(
-        "results",
-        []
-    )
-
-    print(
-        f"🔎 '{termo}': "
-        f"{len(resultados)} itens encontrados."
-    )
-
-    return resultados
-
-
-# ============================================================
-# CONSULTAR PREÇO PROMOCIONAL
-# ============================================================
-
-def consultar_preco_item(
-    sessao,
-    item_id
-):
-    """
-    Consulta o endpoint atual de preço.
-
-    Retorno esperado:
-
-    {
-        "amount": 799.90,
-        "regular_amount": 999.90
-    }
-    """
-
-    url = (
-        f"{API_BASE_URL}/items/"
-        f"{item_id}/sale_price"
-    )
-
-    parametros = {
-        "context": "channel_marketplace"
-    }
-
-    resposta = fazer_get(
-        sessao,
-        url,
-        parametros
-    )
-
-    if resposta is None:
+    if not dados:
         return None
 
-    if resposta.status_code != 200:
+    atual = converter_numero(dados.get("amount"))
+    anterior = converter_numero(dados.get("regular_amount"))
 
-        print(
-            f"⚠️ Preço indisponível para "
-            f"{item_id}: HTTP "
-            f"{resposta.status_code}"
-        )
-
+    if not atual or not anterior:
         return None
 
-    try:
-        dados = resposta.json()
-
-    except ValueError:
-
-        print(
-            f"⚠️ Preço inválido para "
-            f"{item_id}."
-        )
-
-        return None
-
-    preco_atual = converter_numero(
-        dados.get("amount")
-    )
-
-    preco_anterior = converter_numero(
-        dados.get("regular_amount")
-    )
-
-    if preco_atual is None:
-        return None
-
-    # Sem regular_amount não temos como
-    # comprovar que existe desconto real.
-    if preco_anterior is None:
-        return None
-
-    if preco_anterior <= 0:
-        return None
-
-    if preco_atual <= 0:
-        return None
-
-    if preco_atual >= preco_anterior:
-        return None
-
-    desconto = (
-        (
-            preco_anterior
-            - preco_atual
-        )
-        / preco_anterior
-    ) * 100
-
-    return {
-        "preco_anterior": preco_anterior,
-        "preco_atual": preco_atual,
-        "desconto": desconto
-    }
+    return anterior, atual
 
 
-# ============================================================
-# NORMALIZAR PRODUTO
-# ============================================================
-
-def normalizar_produto(
-    item,
-    dados_preco
-):
-    """
-    Converte o produto do Mercado Livre
-    para o padrão do deal_processor.py.
-    """
-
+def normalizar_produto(item, preco_anterior, preco_atual):
     item_id = item.get("id")
     nome = item.get("title")
     url = item.get("permalink")
-    imagem = item.get("thumbnail")
-    condicao = item.get("condition")
 
-    if not item_id:
+    if not item_id or not nome or not url:
         return None
 
-    if not nome:
+    if item.get("condition") != "new":
         return None
-
-    if not url:
-        return None
-
-    # Evita itens usados no bot de promoções
-    if condicao and condicao != "new":
-        return None
-
-    imagem = normalizar_imagem(
-        imagem
-    )
 
     return {
         "nome": nome.strip(),
         "loja": "Mercado Livre",
-        "preco_anterior": (
-            dados_preco["preco_anterior"]
-        ),
-        "preco_atual": (
-            dados_preco["preco_atual"]
-        ),
+        "preco_anterior": round(preco_anterior, 2),
+        "preco_atual": round(preco_atual, 2),
         "url": url,
-        "imagem": imagem,
-
-        # Metadados opcionais.
-        # O deal_processor ignora estes campos,
-        # mas podem ajudar nos diagnósticos.
+        "imagem": normalizar_imagem(item.get("thumbnail")),
         "item_id": item_id,
-        "origem": "mercado_livre"
+        "origem": "mercado_livre",
     }
 
 
-# ============================================================
-# BUSCAR OFERTAS
-# ============================================================
-
-def buscar_ofertas_mercado_livre(
-    limite_por_busca=LIMITE_POR_BUSCA
-):
-    """
-    Função principal do coletor.
-
-    Retorna:
-
-    [
-        {
-            "nome": "...",
-            "loja": "Mercado Livre",
-            "preco_anterior": 999.90,
-            "preco_atual": 799.90,
-            "url": "...",
-            "imagem": "..."
-        }
-    ]
-    """
-
-    print(
-        "\n🟡 INICIANDO COLETOR "
-        "DO MERCADO LIVRE"
+def buscar_itens_por_termo(cliente, termo, limite):
+    dados = cliente.get(
+        SEARCH_URL,
+        {"q": termo, "limit": limite, "offset": 0, "condition": "new"},
     )
 
-    print("=" * 70)
-
-    access_token = obter_access_token()
-
-    if not access_token:
-
-        print(
-            "❌ Mercado Livre sem "
-            "Access Token válido."
-        )
-
+    if not dados:
         return []
 
-    sessao = criar_sessao(
-        access_token
+    resultados = dados.get("results", [])
+
+    print(f"🔎 '{termo}': {len(resultados)} itens encontrados.")
+
+    return resultados
+
+
+def processar_item(cliente, item):
+    """Roda em thread. Retorna o produto normalizado ou None."""
+
+    item_id = item.get("id")
+
+    if not item_id or item.get("condition") != "new":
+        return None
+
+    if item.get("available_quantity") == 0:
+        return None
+
+    precos = precos_do_resultado(item) or consultar_preco_item(
+        cliente, item_id
     )
+
+    if not precos:
+        return None
+
+    anterior, atual = precos
+
+    if not validar_precos(item.get("title"), anterior, atual):
+        return None
+
+    return normalizar_produto(item, anterior, atual)
+
+
+# ============================================================
+# COLETOR PRINCIPAL (assíncrono)
+# ============================================================
+
+async def buscar_ofertas_mercado_livre(
+    limite_por_busca=LIMITE_POR_BUSCA,
+):
+    """
+    Retorna uma lista de produtos no padrão do deal_processor.
+    Todo o I/O bloqueante roda em threads, então o loop do
+    Discord não trava durante a coleta.
+    """
+
+    print("\n" + "=" * 60)
+    print("🟡 COLETOR MERCADO LIVRE")
+    print("=" * 60)
+
+    access_token = await asyncio.to_thread(obter_access_token)
+
+    if not access_token:
+        print("❌ Mercado Livre sem Access Token válido.")
+        return []
+
+    cliente = ClienteML(access_token)
+    semaforo = asyncio.Semaphore(CONCORRENCIA)
+
+    async def limitado(funcao, *args):
+        async with semaforo:
+            return await asyncio.to_thread(funcao, *args)
 
     ofertas = []
+    ids_vistos = set()
 
-    itens_processados = set()
-
-    for termo in TERMOS_BUSCA:
-
-        itens = buscar_itens_por_termo(
-            sessao,
-            termo,
-            limite_por_busca
+    try:
+        buscas = await asyncio.gather(
+            *(
+                limitado(buscar_itens_por_termo, cliente, termo, limite_por_busca)
+                for termo in TERMOS_BUSCA
+            )
         )
 
-        for item in itens:
+        itens_unicos = []
 
-            item_id = item.get("id")
+        for itens in buscas:
+            for item in itens:
+                item_id = item.get("id")
 
-            if not item_id:
-                continue
+                if item_id and item_id not in ids_vistos:
+                    ids_vistos.add(item_id)
+                    itens_unicos.append(item)
 
-            # Evita o mesmo anúncio aparecendo
-            # em várias buscas.
-            if item_id in itens_processados:
-                continue
-
-            itens_processados.add(
-                item_id
-            )
-
-            # Apenas produtos novos
-            if item.get("condition") != "new":
-                continue
-
-            dados_preco = consultar_preco_item(
-                sessao,
-                item_id
-            )
-
-            if not dados_preco:
-                continue
-
-            produto = normalizar_produto(
-                item,
-                dados_preco
-            )
-
-            if not produto:
-                continue
-
-            ofertas.append(
-                produto
-            )
-
-            print(
-                f"✅ Oferta encontrada: "
-                f"{produto['nome']}"
-            )
-
-            print(
-                f"   R$ "
-                f"{produto['preco_anterior']:.2f}"
-                f" -> R$ "
-                f"{produto['preco_atual']:.2f}"
-            )
-
-            print(
-                f"   Desconto: "
-                f"{dados_preco['desconto']:.2f}%"
-            )
-
-            time.sleep(
-                INTERVALO_REQUISICOES
-            )
-
-        time.sleep(
-            INTERVALO_REQUISICOES
+        resultados = await asyncio.gather(
+            *(limitado(processar_item, cliente, item) for item in itens_unicos)
         )
 
-    print("\n" + "=" * 70)
+    except AcessoNegado as erro:
+        print(
+            "🚫 Mercado Livre negou acesso (HTTP 403) em "
+            f"{erro}. Verifique permissões do app e se a busca "
+            "pública está liberada para suas credenciais."
+        )
+        return []
 
-    print(
-        f"🟡 Mercado Livre: "
-        f"{len(ofertas)} ofertas válidas."
-    )
+    for produto in resultados:
+        if not produto:
+            continue
 
-    print(
-        f"📦 Itens únicos analisados: "
-        f"{len(itens_processados)}"
-    )
+        ofertas.append(produto)
 
-    print("=" * 70)
+        desconto = calcular_desconto(
+            produto["preco_anterior"], produto["preco_atual"]
+        )
+
+        print(
+            f"✅ {produto['nome'][:70]}\n"
+            f"   R$ {produto['preco_anterior']:.2f} -> "
+            f"R$ {produto['preco_atual']:.2f} ({desconto:.2f}% OFF)"
+        )
+
+    print("-" * 60)
+    print(f"🟡 Mercado Livre: {len(ofertas)} ofertas válidas.")
+    print(f"📦 Itens únicos analisados: {len(ids_vistos)}")
+    print("-" * 60)
 
     return ofertas
 
 
-# ============================================================
-# ALIAS PARA O SCHEDULER
-# ============================================================
+async def coletar_ofertas(limite=None):
+    """Interface padrão dos coletores usada pelo scheduler."""
 
-def coletar_ofertas():
-    """
-    Permite que o scheduler utilize
-    o mesmo padrão dos outros collectors.
-    """
+    ofertas = await buscar_ofertas_mercado_livre()
 
-    return buscar_ofertas_mercado_livre()
+    return ofertas[:limite] if limite else ofertas
 
 
 # ============================================================
@@ -597,81 +378,8 @@ def coletar_ofertas():
 # ============================================================
 
 if __name__ == "__main__":
-
-    ofertas = buscar_ofertas_mercado_livre(
-        limite_por_busca=5
+    resultado = asyncio.run(
+        buscar_ofertas_mercado_livre(limite_por_busca=5)
     )
 
-    print(
-        "\n🧪 RESULTADO DO TESTE ISOLADO"
-    )
-
-    print("=" * 70)
-
-    if not ofertas:
-
-        print(
-            "\n⚠️ Nenhuma oferta promocional "
-            "foi encontrada."
-        )
-
-        print(
-            "Isso pode significar que os itens "
-            "retornados não possuem "
-            "regular_amount maior que amount."
-        )
-
-    for indice, produto in enumerate(
-        ofertas[:20],
-        start=1
-    ):
-
-        desconto = (
-            (
-                produto["preco_anterior"]
-                - produto["preco_atual"]
-            )
-            / produto["preco_anterior"]
-        ) * 100
-
-        print(
-            f"\n📦 Oferta #{indice}"
-        )
-
-        print(
-            f"Nome: {produto['nome']}"
-        )
-
-        print(
-            f"Loja: {produto['loja']}"
-        )
-
-        print(
-            f"Anterior: "
-            f"R$ {produto['preco_anterior']:.2f}"
-        )
-
-        print(
-            f"Atual: "
-            f"R$ {produto['preco_atual']:.2f}"
-        )
-
-        print(
-            f"Desconto: "
-            f"{desconto:.2f}%"
-        )
-
-        print(
-            f"Item ID: "
-            f"{produto['item_id']}"
-        )
-
-        print(
-            f"URL: {produto['url']}"
-        )
-
-        print(
-            f"Imagem: {produto['imagem']}"
-        )
-
-        print("-" * 70)
+    print(f"\n🧪 {len(resultado)} ofertas no teste isolado.")

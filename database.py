@@ -1,7 +1,8 @@
 import sqlite3
+from pathlib import Path
 
 
-DB_NAME = "promocoes.db"
+DB_NAME = str(Path(__file__).resolve().parent / "promocoes.db")
 
 
 # ============================================================

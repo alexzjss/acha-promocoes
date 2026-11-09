@@ -10,7 +10,7 @@ from dotenv import load_dotenv, set_key
 
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
 load_dotenv()

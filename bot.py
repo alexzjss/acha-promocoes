@@ -8,13 +8,6 @@ from database import criar_banco
 from services.deal_processor import processar_produto
 from services.scheduler import iniciar_scheduler
 
-from database import (
-    criar_banco,
-    oferta_ja_publicada,
-    registrar_oferta_publicada,
-    salvar_produto
-)
-
 
 load_dotenv()
 
@@ -30,19 +23,12 @@ bot = commands.Bot(
 )
 
 
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
-
-
 @bot.event
 async def on_ready():
     criar_banco()
 
+    # on_ready pode disparar de novo em reconexões;
+    # iniciar_scheduler ignora chamadas repetidas.
     iniciar_scheduler(bot)
 
     print("------------------------------")
@@ -50,6 +36,7 @@ async def on_ready():
     print(f"🤖 Bot: {bot.user}")
     print(f"🆔 ID: {bot.user.id}")
     print("------------------------------")
+
 
 @bot.command()
 async def testar(ctx):
@@ -69,7 +56,10 @@ async def testar(ctx):
 
     status = resultado["status"]
 
-    if status == "duplicada":
+    if status == "publicada":
+        await ctx.send("✅ Oferta de teste publicada.")
+
+    elif status == "duplicada":
         await ctx.send(
             "🛑 Essa oferta já foi publicada nesse preço."
         )
@@ -93,11 +83,16 @@ async def testar(ctx):
             "❌ Não consegui publicar essa oferta."
         )
 
+    else:
+        await ctx.send(
+            f"⚠️ Oferta descartada: {status}"
+        )
 
-if TOKEN is None:
-    raise ValueError(
-        "DISCORD_TOKEN não foi encontrado no arquivo .env"
-    )
 
+if __name__ == "__main__":
+    if TOKEN is None:
+        raise ValueError(
+            "DISCORD_TOKEN não foi encontrado no arquivo .env"
+        )
 
-bot.run(TOKEN)
+    bot.run(TOKEN)
