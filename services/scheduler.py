@@ -1,10 +1,41 @@
+import asyncio
+import importlib
+import os
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from collectors.kabum import buscar_ofertas_kabum
+from collectors import COLETORES
 from services.deal_processor import processar_produto
 
 
 scheduler = AsyncIOScheduler()
+
+LIMITE_POR_LOJA = 20
+
+
+def carregar_coletor(caminho):
+    modulo, funcao = caminho.split(":")
+
+    return getattr(importlib.import_module(modulo), funcao)
+
+
+async def coletar_loja(nome, caminho):
+    """Executa um coletor isolado: falha de uma loja não afeta as outras."""
+
+    try:
+        coletor = carregar_coletor(caminho)
+
+        produtos = await coletor(limite=LIMITE_POR_LOJA)
+
+    except Exception as erro:
+        print(f"❌ Erro durante coleta de {nome}: {erro}")
+        return []
+
+    if not produtos:
+        print(f"⚠️ Nenhuma oferta válida encontrada em {nome}.")
+        return []
+
+    return produtos
 
 
 async def verificar_ofertas(bot):
@@ -12,110 +43,60 @@ async def verificar_ofertas(bot):
     print("🔎 INICIANDO VERIFICAÇÃO AUTOMÁTICA DE OFERTAS")
     print("=" * 60)
 
-    # ==========================================
-    # COLETAR OFERTAS DA KABUM
-    # ==========================================
+    contadores = {
+        "coletadas": 0,
+        "publicada": 0,
+        "duplicada": 0,
+        "rejeitada": 0,
+        "descartada": 0,
+        "erro": 0,
+    }
 
-    try:
-        produtos = await buscar_ofertas_kabum(
-            limite=20
-        )
+    for nome, caminho in COLETORES:
+        produtos = await coletar_loja(nome, caminho)
 
-    except Exception as erro:
-        print(
-            f"❌ Erro durante coleta da KaBuM!: {erro}"
-        )
-        return
+        contadores["coletadas"] += len(produtos)
 
-    if not produtos:
-        print(
-            "⚠️ Nenhuma oferta válida encontrada na KaBuM!."
-        )
-        return
+        for produto in produtos:
+            try:
+                resultado = await processar_produto(bot, produto)
 
-    print(
-        f"📦 Produtos recebidos pelo scheduler: "
-        f"{len(produtos)}"
-    )
+                status = resultado.get("status", "erro")
 
-    # ==========================================
-    # CONTADORES
-    # ==========================================
+            except Exception as erro:
+                print(
+                    f"❌ Erro processando "
+                    f"{produto.get('nome', 'Produto desconhecido')}: {erro}"
+                )
+                status = "erro"
 
-    publicadas = 0
-    duplicadas = 0
-    rejeitadas = 0
-    erros = 0
+            print(f"📋 {produto.get('nome')} -> {status}")
 
-    # ==========================================
-    # PROCESSAR CADA PRODUTO
-    # ==========================================
+            if status in ("publicada", "duplicada", "rejeitada"):
+                contadores[status] += 1
 
-    for produto in produtos:
-        try:
-            resultado = await processar_produto(
-                bot,
-                produto
-            )
-
-            status = resultado.get(
-                "status",
-                "erro"
-            )
-
-            print(
-                f"📋 {produto['nome']} -> {status}"
-            )
-
-            if status == "publicada":
-                publicadas += 1
-
-            elif status == "duplicada":
-                duplicadas += 1
-
-            elif status == "rejeitada":
-                rejeitadas += 1
+            elif status in (
+                "preco_invalido",
+                "desconto_insuficiente",
+                "preco_suspeito",
+            ):
+                contadores["descartada"] += 1
 
             else:
-                erros += 1
+                contadores["erro"] += 1
 
-        except Exception as erro:
-            erros += 1
-
-            print(
-                f"❌ Erro processando "
-                f"{produto.get('nome', 'Produto desconhecido')}: "
-                f"{erro}"
-            )
-
-    # ==========================================
-    # RESUMO
-    # ==========================================
+            # Cede o loop para o Discord manter o heartbeat.
+            await asyncio.sleep(0)
 
     print("\n" + "-" * 60)
     print("📊 RESUMO DA VERIFICAÇÃO")
     print("-" * 60)
-
-    print(
-        f"📦 Coletadas: {len(produtos)}"
-    )
-
-    print(
-        f"🔥 Publicadas: {publicadas}"
-    )
-
-    print(
-        f"⏭️ Duplicadas: {duplicadas}"
-    )
-
-    print(
-        f"❌ Rejeitadas: {rejeitadas}"
-    )
-
-    print(
-        f"⚠️ Erros: {erros}"
-    )
-
+    print(f"📦 Coletadas: {contadores['coletadas']}")
+    print(f"🔥 Publicadas: {contadores['publicada']}")
+    print(f"⏭️ Duplicadas: {contadores['duplicada']}")
+    print(f"❌ Rejeitadas (score): {contadores['rejeitada']}")
+    print(f"🚫 Descartadas (preço): {contadores['descartada']}")
+    print(f"⚠️ Erros: {contadores['erro']}")
     print("-" * 60)
     print("✅ VERIFICAÇÃO FINALIZADA")
     print("=" * 60 + "\n")
@@ -123,34 +104,27 @@ async def verificar_ofertas(bot):
 
 def iniciar_scheduler(bot):
     if scheduler.running:
-        print(
-            "⚠️ Scheduler já está executando."
-        )
+        print("⚠️ Scheduler já está executando.")
         return
+
+    # Lido aqui (e não no import) para respeitar o .env já carregado.
+    INTERVALO_MINUTOS = int(os.getenv("SCHEDULER_INTERVALO_MIN", "15"))
 
     scheduler.add_job(
         verificar_ofertas,
         trigger="interval",
-
-        # Mantemos 60 segundos apenas durante os testes
-        seconds=60,
-
+        minutes=INTERVALO_MINUTOS,
         args=[bot],
-
-        id="verificar_ofertas_kabum",
-
+        id="verificar_ofertas",
         replace_existing=True,
-
         max_instances=1,
-
-        coalesce=True
+        coalesce=True,
     )
 
     scheduler.start()
 
-    print("⏰ Scheduler iniciado.")
+    lojas = ", ".join(nome for nome, _ in COLETORES)
 
-    print(
-        "🟠 KaBuM! será verificada "
-        "a cada 60 segundos."
-    )
+    print("⏰ Scheduler iniciado.")
+    print(f"🛒 Lojas: {lojas}")
+    print(f"🕒 Verificação a cada {INTERVALO_MINUTOS} minuto(s).")

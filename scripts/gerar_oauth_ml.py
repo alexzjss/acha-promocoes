@@ -13,7 +13,7 @@ from dotenv import load_dotenv, set_key
 # CAMINHO FIXO DO .ENV
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
 load_dotenv(dotenv_path=ENV_FILE)

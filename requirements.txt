@@ -4,3 +4,5 @@ requests
 python-dotenv
 beautifulsoup4
 discord.py
+APScheduler
+playwright
