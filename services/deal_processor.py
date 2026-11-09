@@ -1,4 +1,4 @@
-from services.category_classifier import identificar_categoria
+from services.category_classifier import eh_tecnologia, identificar_categoria
 from services.channel_router import escolher_canal
 from services.deal_score import analisar_oferta
 from services.alertas import notificar_alertas
@@ -63,6 +63,15 @@ async def processar_produto(bot, produto):
     )
 
     produto["categoria"] = categoria
+
+    # Nicho: 'outros' só passa se for produto de tecnologia.
+    if categoria == "outros" and not eh_tecnologia(produto["nome"]):
+        print(
+            f"🚫 Fora do nicho de tecnologia: "
+            f"{produto['nome'][:60]}"
+        )
+
+        return {"status": "fora_do_nicho"}
 
     print(
         f"🔎 Categoria identificada: "

@@ -80,6 +80,7 @@ async def verificar_ofertas(bot):
                 "preco_invalido",
                 "desconto_insuficiente",
                 "preco_suspeito",
+                "fora_do_nicho",
             ):
                 contadores["descartada"] += 1
 

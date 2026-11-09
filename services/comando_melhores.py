@@ -112,9 +112,6 @@ def montar_embed(estado, total, linhas):
     if estado["categoria"]:
         filtros.append(f"categoria: {estado['categoria']}")
 
-    else:
-        filtros.append("sem 'outros'")
-
     if estado["loja"]:
         filtros.append(f"loja: {estado['loja']}")
 
@@ -164,6 +161,7 @@ def consultar(estado):
         periodo=estado["periodo"],
         limite=POR_PAGINA,
         offset=estado["pagina"] * POR_PAGINA,
+        excluir_outros=False,
     )
 
 
