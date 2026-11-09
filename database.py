@@ -50,6 +50,17 @@ def criar_banco():
         )
     """)
 
+    # Alertas por palavra-chave (comando /alerta)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alertas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            palavras TEXT NOT NULL,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, palavras)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -206,6 +217,170 @@ def listar_ofertas_publicadas():
     conn.close()
 
     return ofertas
+
+
+# ============================================================
+# RANKING DE MELHORES OFERTAS
+# ============================================================
+
+ORDENS = {
+    "desconto": "desconto_pct DESC, economia DESC",
+    "economia": "economia DESC, desconto_pct DESC",
+    "preco": "preco_atual ASC, desconto_pct DESC",
+    "score": "score DESC, desconto_pct DESC",
+}
+
+PERIODOS_HORAS = {
+    "24h": 24,
+    "7d": 24 * 7,
+    "tudo": None,
+}
+
+
+def buscar_melhores(
+    ordem="desconto",
+    categoria=None,
+    loja=None,
+    preco_max=None,
+    periodo="24h",
+    limite=5,
+    offset=0
+):
+    """
+    Retorna (total, linhas): uma linha por produto (a coleta mais
+    recente de cada URL), ordenada pelo critério escolhido.
+    """
+
+    if ordem not in ORDENS:
+        ordem = "desconto"
+
+    horas = PERIODOS_HORAS.get(periodo, 24)
+
+    parametros = []
+    filtro_periodo = ""
+
+    if horas is not None:
+        filtro_periodo = "WHERE data_coleta >= datetime('now', ?)"
+        parametros.append(f"-{horas} hours")
+
+    filtros = ["preco_anterior > preco_atual", "preco_anterior > 0"]
+
+    if categoria:
+        filtros.append("categoria = ?")
+        parametros.append(categoria)
+
+    if loja:
+        filtros.append("loja = ?")
+        parametros.append(loja)
+
+    if preco_max is not None:
+        filtros.append("preco_atual <= ?")
+        parametros.append(preco_max)
+
+    base = f"""
+        FROM (
+            SELECT p.*,
+                   (p.preco_anterior - p.preco_atual) AS economia,
+                   (p.preco_anterior - p.preco_atual)
+                       * 100.0 / p.preco_anterior AS desconto_pct
+            FROM produtos p
+            JOIN (
+                SELECT MAX(id) AS mid
+                FROM produtos
+                {filtro_periodo}
+                GROUP BY url
+            ) ultimo ON p.id = ultimo.mid
+        )
+        WHERE {" AND ".join(filtros)}
+    """
+
+    conn = conectar()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(f"SELECT COUNT(*) {base}", parametros)
+    total = cursor.fetchone()[0]
+
+    cursor.execute(
+        f"SELECT * {base} ORDER BY {ORDENS[ordem]} LIMIT ? OFFSET ?",
+        parametros + [limite, offset]
+    )
+
+    linhas = [dict(linha) for linha in cursor.fetchall()]
+
+    conn.close()
+
+    return total, linhas
+
+
+def listar_lojas():
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT DISTINCT loja FROM produtos ORDER BY loja")
+
+    lojas = [linha[0] for linha in cursor.fetchall()]
+
+    conn.close()
+
+    return lojas
+
+
+# ============================================================
+# ALERTAS POR PALAVRA-CHAVE
+# ============================================================
+
+def adicionar_alerta(user_id, palavras):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT OR IGNORE INTO alertas (user_id, palavras) VALUES (?, ?)",
+        (user_id, palavras.lower().strip())
+    )
+
+    criado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return criado
+
+
+def remover_alerta(user_id, palavras):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM alertas WHERE user_id = ? AND palavras = ?",
+        (user_id, palavras.lower().strip())
+    )
+
+    removido = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return removido
+
+
+def listar_alertas(user_id=None):
+    conn = conectar()
+    cursor = conn.cursor()
+
+    if user_id is None:
+        cursor.execute("SELECT user_id, palavras FROM alertas")
+    else:
+        cursor.execute(
+            "SELECT user_id, palavras FROM alertas WHERE user_id = ?",
+            (user_id,)
+        )
+
+    alertas = cursor.fetchall()
+
+    conn.close()
+
+    return alertas
 
 
 # ============================================================

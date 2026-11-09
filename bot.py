@@ -24,6 +24,23 @@ bot = commands.Bot(
 
 
 @bot.event
+async def setup_hook():
+    # Registra /melhores, /alerta etc. e sincroniza com o Discord.
+    await bot.load_extension("services.comando_melhores")
+
+    guild_id = os.getenv("DISCORD_GUILD_ID")
+
+    if guild_id:
+        # Sincronização por servidor aparece na hora (útil em testes).
+        guild = discord.Object(id=int(guild_id))
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+
+    else:
+        await bot.tree.sync()
+
+
+@bot.event
 async def on_ready():
     criar_banco()
 

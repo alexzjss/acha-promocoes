@@ -1,6 +1,7 @@
 from services.category_classifier import identificar_categoria
 from services.channel_router import escolher_canal
 from services.deal_score import analisar_oferta
+from services.alertas import notificar_alertas
 from services.discord_sender import enviar_oferta
 
 from database import (
@@ -381,6 +382,12 @@ async def processar_produto(bot, produto):
         preco=preco_atual,
         canal_id=canal_id
     )
+
+    try:
+        await notificar_alertas(bot, oferta)
+
+    except Exception as erro:
+        print(f"⚠️ Falha ao notificar alertas: {erro}")
 
     print(
         f"🔥 PROCESSAMENTO CONCLUÍDO: "
