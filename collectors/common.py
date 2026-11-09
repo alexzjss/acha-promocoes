@@ -190,7 +190,7 @@ def escolher_nome(texto, minimo=12):
 async def coletar_cards_playwright(
     *,
     loja,
-    url_pagina,
+    url_pagina,  # str ou lista de URLs (várias páginas/categorias)
     base_url,
     seletor_card,
     seletor_link,
@@ -198,6 +198,7 @@ async def coletar_cards_playwright(
     espera_ms=4000,
     remover_query=True,
     seletor_nome=None,
+    pausa_entre_paginas_s=0,
 ):
     """
     Coletor genérico baseado em Playwright para lojas cujo HTML
@@ -214,6 +215,8 @@ async def coletar_cards_playwright(
     print(f"🛒 COLETOR {loja.upper()}")
     print("=" * 60)
 
+    urls = [url_pagina] if isinstance(url_pagina, str) else list(url_pagina)
+
     produtos = []
     urls_vistas = set()
 
@@ -229,128 +232,149 @@ async def coletar_cards_playwright(
 
             page = await context.new_page()
 
-            try:
-                resposta = await page.goto(
-                    url_pagina,
-                    wait_until="domcontentloaded",
-                    timeout=60000,
-                )
-
-                if resposta:
-                    print(f"🌐 {loja} respondeu: {resposta.status}")
-
-                await page.wait_for_timeout(espera_ms)
-
-                # Dispara carregamento preguiçoso de imagens/cards.
-                for _ in range(4):
-                    await page.mouse.wheel(0, 3000)
-                    await page.wait_for_timeout(1000)
-
-            except Exception as erro:
-                print(f"❌ Erro acessando {loja}: {erro}")
-                return []
-
-            cards = page.locator(seletor_card)
-            total = await cards.count()
-
-            print(f"🔎 Cards encontrados: {total}")
-
-            for indice in range(total):
+            for numero_pagina, url_atual in enumerate(urls):
                 if len(produtos) >= limite:
                     break
 
+                # Pausa entre páginas para não disparar anti-bot.
+                if numero_pagina > 0 and pausa_entre_paginas_s:
+                    await page.wait_for_timeout(
+                        pausa_entre_paginas_s * 1000
+                    )
+
                 try:
-                    card = cards.nth(indice)
-                    # seletor_link=None -> o próprio card é o link.
-                    link = (
-                        card.locator(seletor_link).first
-                        if seletor_link
-                        else card
+                    resposta = await page.goto(
+                        url_atual,
+                        wait_until="domcontentloaded",
+                        timeout=60000,
                     )
 
-                    if await link.count() == 0:
-                        continue
+                    if resposta:
+                        print(f"🌐 {loja} respondeu: {resposta.status}")
 
-                    url = normalizar_url(
-                        base_url,
-                        await link.get_attribute("href"),
-                        remover_query,
-                    )
+                        if resposta.status in (403, 429):
+                            print(
+                                f"🚫 {loja} bloqueou (HTTP "
+                                f"{resposta.status}); interrompendo "
+                                "as demais páginas."
+                            )
+                            break
 
-                    if not url or url in urls_vistas:
-                        continue
+                        if resposta.status >= 400:
+                            continue
 
-                    texto = (await card.inner_text()).strip()
+                    await page.wait_for_timeout(espera_ms)
 
-                    if not texto:
-                        continue
-
-                    nome = None
-
-                    if seletor_nome:
-                        el = card.locator(seletor_nome).first
-
-                        if await el.count() > 0:
-                            nome = (await el.inner_text()).strip()
-
-                    nome = nome or (
-                        await link.get_attribute("title")
-                        or await link.get_attribute("aria-label")
-                        or escolher_nome(texto)
-                        or (await link.inner_text()).strip().splitlines()[0]
-                    )
-
-                    if not nome or len(nome.strip()) < 8:
-                        continue
-
-                    precos = extrair_precos(texto)
-
-                    if len(precos) < 2:
-                        continue
-
-                    preco_anterior = max(precos[:2])
-                    preco_atual = min(precos[:2])
-
-                    if not validar_precos(nome, preco_anterior, preco_atual):
-                        continue
-
-                    imagem = None
-                    img = card.locator("img").first
-
-                    if await img.count() > 0:
-                        imagem = (
-                            await img.get_attribute("src")
-                            or await img.get_attribute("data-src")
-                        )
-
-                        if imagem and imagem.startswith("data:"):
-                            imagem = await img.get_attribute("data-src")
-
-                        imagem = normalizar_url(
-                            base_url, imagem, remover_query=False
-                        )
-
-                    produtos.append(
-                        {
-                            "nome": nome.strip(),
-                            "loja": loja,
-                            "preco_anterior": round(preco_anterior, 2),
-                            "preco_atual": round(preco_atual, 2),
-                            "url": url,
-                            "imagem": imagem,
-                        }
-                    )
-                    urls_vistas.add(url)
-
-                    desconto = calcular_desconto(preco_anterior, preco_atual)
-                    print(
-                        f"✅ {nome.strip()[:70]}\n"
-                        f"   R$ {preco_anterior:.2f} -> R$ {preco_atual:.2f} "
-                        f"({desconto:.2f}% OFF)"
-                    )
+                    # Dispara carregamento preguiçoso de imagens/cards.
+                    for _ in range(4):
+                        await page.mouse.wheel(0, 3000)
+                        await page.wait_for_timeout(1000)
 
                 except Exception as erro:
-                    print(f"⚠️ Card {indice} ignorado: {erro}")
+                    print(f"❌ Erro acessando {loja}: {erro}")
+                    continue
+
+                cards = page.locator(seletor_card)
+                total = await cards.count()
+
+                print(f"🔎 Cards encontrados: {total}")
+
+                for indice in range(total):
+                    if len(produtos) >= limite:
+                        break
+
+                    try:
+                        card = cards.nth(indice)
+                        # seletor_link=None -> o próprio card é o link.
+                        link = (
+                            card.locator(seletor_link).first
+                            if seletor_link
+                            else card
+                        )
+
+                        if await link.count() == 0:
+                            continue
+
+                        url = normalizar_url(
+                            base_url,
+                            await link.get_attribute("href"),
+                            remover_query,
+                        )
+
+                        if not url or url in urls_vistas:
+                            continue
+
+                        texto = (await card.inner_text()).strip()
+
+                        if not texto:
+                            continue
+
+                        nome = None
+
+                        if seletor_nome:
+                            el = card.locator(seletor_nome).first
+
+                            if await el.count() > 0:
+                                nome = (await el.inner_text()).strip()
+
+                        nome = nome or (
+                            await link.get_attribute("title")
+                            or await link.get_attribute("aria-label")
+                            or escolher_nome(texto)
+                            or (await link.inner_text()).strip().splitlines()[0]
+                        )
+
+                        if not nome or len(nome.strip()) < 8:
+                            continue
+
+                        precos = extrair_precos(texto)
+
+                        if len(precos) < 2:
+                            continue
+
+                        preco_anterior = max(precos[:2])
+                        preco_atual = min(precos[:2])
+
+                        if not validar_precos(nome, preco_anterior, preco_atual):
+                            continue
+
+                        imagem = None
+                        img = card.locator("img").first
+
+                        if await img.count() > 0:
+                            imagem = (
+                                await img.get_attribute("src")
+                                or await img.get_attribute("data-src")
+                            )
+
+                            if imagem and imagem.startswith("data:"):
+                                imagem = await img.get_attribute("data-src")
+
+                            imagem = normalizar_url(
+                                base_url, imagem, remover_query=False
+                            )
+
+                        produtos.append(
+                            {
+                                "nome": nome.strip(),
+                                "loja": loja,
+                                "preco_anterior": round(preco_anterior, 2),
+                                "preco_atual": round(preco_atual, 2),
+                                "url": url,
+                                "imagem": imagem,
+                            }
+                        )
+                        urls_vistas.add(url)
+
+                        desconto = calcular_desconto(preco_anterior, preco_atual)
+                        print(
+                            f"✅ {nome.strip()[:70]}\n"
+                            f"   R$ {preco_anterior:.2f} -> R$ {preco_atual:.2f} "
+                            f"({desconto:.2f}% OFF)"
+                        )
+
+                    except Exception as erro:
+                        print(f"⚠️ Card {indice} ignorado: {erro}")
 
         finally:
             await browser.close()

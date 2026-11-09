@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -10,7 +11,7 @@ from services.deal_processor import processar_produto
 
 scheduler = AsyncIOScheduler()
 
-LIMITE_POR_LOJA = 20
+LIMITE_POR_LOJA = 80
 
 
 def carregar_coletor(caminho):
@@ -114,6 +115,9 @@ def iniciar_scheduler(bot):
         verificar_ofertas,
         trigger="interval",
         minutes=INTERVALO_MINUTOS,
+        # Primeira coleta logo ao iniciar (senão o banco/ranking
+        # ficaria vazio até o primeiro intervalo).
+        next_run_time=datetime.now(),
         args=[bot],
         id="verificar_ofertas",
         replace_existing=True,

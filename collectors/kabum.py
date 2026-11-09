@@ -344,7 +344,7 @@ def validar_precos(
     return True
 
 
-async def buscar_ofertas_kabum(limite=20):
+async def buscar_ofertas_kabum_vitrine(limite=20):
     print("\n" + "=" * 60)
     print("🟠 COLETOR KABUM")
     print("=" * 60)
@@ -380,8 +380,20 @@ async def buscar_ofertas_kabum(limite=20):
                     f"{resposta.status}"
                 )
 
+            # Espera os carrosséis renderizarem (tempo fixo era flaky).
+            try:
+                await page.wait_for_selector(
+                    'div.swiper-slide a[href*="/produto/"]',
+                    timeout=20000
+                )
+
+            except Exception:
+                print(
+                    "⚠️ KaBuM!: carrosséis não apareceram em 20s."
+                )
+
             await page.wait_for_timeout(
-                5000
+                2000
             )
 
         except Exception as erro:
@@ -573,3 +585,47 @@ async def buscar_ofertas_kabum(limite=20):
     print("-" * 60)
 
     return produtos
+
+
+URLS_KABUM_CATEGORIAS = [
+    "https://www.kabum.com.br/hardware/placa-de-video-vga",
+    "https://www.kabum.com.br/hardware/processadores",
+    "https://www.kabum.com.br/hardware/memoria-ram",
+    "https://www.kabum.com.br/hardware/placas-mae",
+    "https://www.kabum.com.br/hardware/ssd-2-5",
+    "https://www.kabum.com.br/hardware/fontes",
+    "https://www.kabum.com.br/computadores/monitores",
+]
+
+
+async def buscar_ofertas_kabum_categorias(limite=60):
+    """Páginas de listagem por categoria (cada card é o próprio link)."""
+
+    from collectors.common import coletar_cards_playwright
+
+    return await coletar_cards_playwright(
+        loja="KaBuM!",
+        url_pagina=URLS_KABUM_CATEGORIAS,
+        base_url=BASE_URL,
+        seletor_card='a[href*="/produto/"]',
+        seletor_link=None,
+        limite=limite,
+        espera_ms=5000,
+    )
+
+
+async def buscar_ofertas_kabum(limite=20):
+    """Vitrine de ofertas + categorias, sem repetir produtos."""
+
+    produtos = await buscar_ofertas_kabum_vitrine(limite=limite)
+
+    vistos = {p["url"] for p in produtos}
+
+    if len(produtos) < limite:
+        extras = await buscar_ofertas_kabum_categorias(
+            limite=limite - len(produtos)
+        )
+
+        produtos += [p for p in extras if p["url"] not in vistos]
+
+    return produtos[:limite]

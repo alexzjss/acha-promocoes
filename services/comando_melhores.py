@@ -76,6 +76,25 @@ def brl(valor):
     return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def historico(item):
+    """Compara o preço atual com o histórico registrado pelo bot."""
+
+    if item.get("observacoes", 0) < 2:
+        return ""
+
+    menor = item["menor_preco"]
+    maior = item["maior_preco"]
+
+    # Preço nunca mudou desde a primeira coleta: nada a afirmar.
+    if maior == menor:
+        return ""
+
+    if item["preco_atual"] <= menor:
+        return f"\n🏅 **menor preço já registrado** (já esteve {brl(maior)})"
+
+    return f"\n📊 menor preço visto: {brl(menor)}"
+
+
 def montar_embed(estado, total, linhas):
     pagina = estado["pagina"]
     paginas = max(1, -(-total // POR_PAGINA))
@@ -92,6 +111,9 @@ def montar_embed(estado, total, linhas):
 
     if estado["categoria"]:
         filtros.append(f"categoria: {estado['categoria']}")
+
+    else:
+        filtros.append("sem 'outros'")
 
     if estado["loja"]:
         filtros.append(f"loja: {estado['loja']}")
@@ -122,7 +144,7 @@ def montar_embed(estado, total, linhas):
             f"**{brl(item['preco_atual'])}**\n"
             f"📉 **{item['desconto_pct']:.1f}% OFF** • "
             f"💸 economia {brl(item['economia'])} • "
-            f"⭐ {item['score']}/100"
+            f"⭐ {item['score']}/100{historico(item)}"
         )
 
     embed.description = "\n\n".join(blocos)

@@ -244,7 +244,8 @@ def buscar_melhores(
     preco_max=None,
     periodo="24h",
     limite=5,
-    offset=0
+    offset=0,
+    excluir_outros=True
 ):
     """
     Retorna (total, linhas): uma linha por produto (a coleta mais
@@ -269,6 +270,9 @@ def buscar_melhores(
         filtros.append("categoria = ?")
         parametros.append(categoria)
 
+    elif excluir_outros:
+        filtros.append("COALESCE(categoria, 'outros') != 'outros'")
+
     if loja:
         filtros.append("loja = ?")
         parametros.append(loja)
@@ -282,7 +286,13 @@ def buscar_melhores(
             SELECT p.*,
                    (p.preco_anterior - p.preco_atual) AS economia,
                    (p.preco_anterior - p.preco_atual)
-                       * 100.0 / p.preco_anterior AS desconto_pct
+                       * 100.0 / p.preco_anterior AS desconto_pct,
+                   (SELECT MIN(h.preco_atual) FROM produtos h
+                     WHERE h.url = p.url) AS menor_preco,
+                   (SELECT MAX(h.preco_atual) FROM produtos h
+                     WHERE h.url = p.url) AS maior_preco,
+                   (SELECT COUNT(*) FROM produtos h
+                     WHERE h.url = p.url) AS observacoes
             FROM produtos p
             JOIN (
                 SELECT MAX(id) AS mid
