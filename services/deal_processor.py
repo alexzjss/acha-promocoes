@@ -1,6 +1,7 @@
 from services.category_classifier import eh_tecnologia, identificar_categoria
 from services.channel_router import escolher_canal
 from services.deal_score import analisar_oferta
+from services.afiliados import aplicar_afiliado
 from services.alertas import notificar_alertas
 from services.discord_sender import enviar_oferta
 
@@ -53,6 +54,14 @@ async def processar_produto(bot, produto):
                 "status": "erro",
                 "motivo": f"Campo ausente: {campo}"
             }
+
+    # ========================================================
+    # 1.1 LINK DE AFILIADO
+    # ========================================================
+
+    # url -> link publicado (afiliado quando existir);
+    # url_original -> chave estável de histórico e anti-duplicação.
+    produto = aplicar_afiliado(produto)
 
     # ========================================================
     # 2. IDENTIFICAR CATEGORIA

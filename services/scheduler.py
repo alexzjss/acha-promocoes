@@ -6,6 +6,7 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from collectors import COLETORES
+from services.afiliados_conversor import converter_pendentes
 from services.deal_processor import processar_produto
 
 
@@ -51,12 +52,24 @@ async def verificar_ofertas(bot):
         "rejeitada": 0,
         "descartada": 0,
         "erro": 0,
+        "afiliados": 0,
     }
 
     for nome, caminho in COLETORES:
         produtos = await coletar_loja(nome, caminho)
 
         contadores["coletadas"] += len(produtos)
+
+        # Converte links de afiliado pendentes antes de publicar
+        # (o processador relê a fila e usa o link convertido).
+        if produtos:
+            try:
+                conversao = await converter_pendentes(limite=20)
+
+                contadores["afiliados"] += conversao["convertidos"]
+
+            except Exception as erro:
+                print(f"⚠️ Erro convertendo links de afiliado: {erro}")
 
         for produto in produtos:
             try:
@@ -98,6 +111,7 @@ async def verificar_ofertas(bot):
     print(f"⏭️ Duplicadas: {contadores['duplicada']}")
     print(f"❌ Rejeitadas (score): {contadores['rejeitada']}")
     print(f"🚫 Descartadas (preço): {contadores['descartada']}")
+    print(f"🔗 Links de afiliado convertidos: {contadores['afiliados']}")
     print(f"⚠️ Erros: {contadores['erro']}")
     print("-" * 60)
     print("✅ VERIFICAÇÃO FINALIZADA")

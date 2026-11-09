@@ -23,3 +23,5 @@ debug_*.json
 
 .DS_Store
 Thumbs.db
+# Dados locais (bancos, sessão do portal de afiliados)
+data/
