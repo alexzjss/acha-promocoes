@@ -29,7 +29,7 @@ API_BASE_URL = "https://api.mercadolibre.com"
 SEARCH_URL = f"{API_BASE_URL}/sites/{SITE_ID}/search"
 
 TIMEOUT = 30
-LIMITE_POR_BUSCA = 10
+LIMITE_POR_BUSCA = 30
 
 # Requisições simultâneas à API (respeita o rate limit do ML).
 CONCORRENCIA = 4
@@ -37,10 +37,14 @@ TENTATIVAS = 3
 
 TERMOS_BUSCA = [
     "placa de video",
-    "processador",
+    "processador ryzen",
+    "processador intel core",
     "placa mae",
-    "memoria ram",
+    "memoria ram ddr4",
+    "memoria ram ddr5",
     "ssd nvme",
+    "ssd sata",
+    "hd externo",
     "fonte gamer",
     "water cooler",
     "cooler processador",
@@ -50,8 +54,14 @@ TERMOS_BUSCA = [
     "suporte monitor",
     "mouse gamer",
     "teclado gamer",
+    "teclado mecanico",
     "headset gamer",
+    "webcam",
+    "microfone gamer",
     "cadeira gamer",
+    "mousepad gamer",
+    "controle gamer",
+    "notebook gamer",
     "action figure",
     "funko pop",
 ]
@@ -175,54 +185,52 @@ def normalizar_imagem(url):
     return url or None
 
 
-def precos_do_resultado(item):
+def melhor_oferta_do_produto(cliente, produto_id):
     """
-    O resultado da busca já traz `price` e, em itens em promoção,
-    `original_price`. Evita uma chamada extra por item.
-    """
-
-    atual = converter_numero(item.get("price"))
-    anterior = converter_numero(item.get("original_price"))
-
-    if atual and anterior and anterior > atual:
-        return anterior, atual
-
-    return None
-
-
-def consultar_preco_item(cliente, item_id):
-    """
-    Fallback: consulta /items/{id}/sale_price.
-    Retorna (preco_anterior, preco_atual) ou None.
+    Consulta as ofertas do produto de catálogo e devolve a de maior
+    desconto real (price < original_price, item novo), ou None.
     """
 
-    dados = cliente.get(
-        f"{API_BASE_URL}/items/{item_id}/sale_price",
-        {"context": "channel_marketplace"},
-    )
+    dados = cliente.get(f"{API_BASE_URL}/products/{produto_id}/items")
 
     if not dados:
         return None
 
-    atual = converter_numero(dados.get("amount"))
-    anterior = converter_numero(dados.get("regular_amount"))
+    melhor = None
 
-    if not atual or not anterior:
+    for oferta in dados.get("results", []):
+        atual = converter_numero(oferta.get("price"))
+        anterior = converter_numero(oferta.get("original_price"))
+
+        if oferta.get("condition") != "new":
+            continue
+
+        if not atual or not anterior or anterior <= atual:
+            continue
+
+        if melhor is None or (anterior - atual) / anterior > (
+            melhor[0] - melhor[1]
+        ) / melhor[0]:
+            melhor = (anterior, atual, oferta.get("item_id"))
+
+    return melhor
+
+
+def normalizar_produto(produto, preco_anterior, preco_atual, item_id):
+    nome = produto.get("name")
+    # O campo permalink do catálogo costuma vir vazio; a página
+    # do produto de catálogo segue o padrão /p/{id}.
+    url = produto.get("permalink") or (
+        f"https://www.mercadolivre.com.br/p/{produto.get('id')}"
+        if produto.get("id")
+        else None
+    )
+
+    if not nome or not url:
         return None
 
-    return anterior, atual
-
-
-def normalizar_produto(item, preco_anterior, preco_atual):
-    item_id = item.get("id")
-    nome = item.get("title")
-    url = item.get("permalink")
-
-    if not item_id or not nome or not url:
-        return None
-
-    if item.get("condition") != "new":
-        return None
+    imagens = produto.get("pictures") or []
+    imagem = (imagens[0].get("url") if imagens else None)
 
     return {
         "nome": nome.strip(),
@@ -230,16 +238,26 @@ def normalizar_produto(item, preco_anterior, preco_atual):
         "preco_anterior": round(preco_anterior, 2),
         "preco_atual": round(preco_atual, 2),
         "url": url,
-        "imagem": normalizar_imagem(item.get("thumbnail")),
+        "imagem": normalizar_imagem(imagem),
         "item_id": item_id,
         "origem": "mercado_livre",
     }
 
 
-def buscar_itens_por_termo(cliente, termo, limite):
+def buscar_produtos_por_termo(cliente, termo, limite):
+    """
+    A busca pública /sites/MLB/search está bloqueada (403) para apps
+    comuns; usamos a busca do catálogo, que continua liberada.
+    """
+
     dados = cliente.get(
-        SEARCH_URL,
-        {"q": termo, "limit": limite, "offset": 0, "condition": "new"},
+        f"{API_BASE_URL}/products/search",
+        {
+            "status": "active",
+            "site_id": SITE_ID,
+            "q": termo,
+            "limit": limite,
+        },
     )
 
     if not dados:
@@ -247,35 +265,35 @@ def buscar_itens_por_termo(cliente, termo, limite):
 
     resultados = dados.get("results", [])
 
-    print(f"🔎 '{termo}': {len(resultados)} itens encontrados.")
+    print(f"🔎 '{termo}': {len(resultados)} produtos de catálogo.")
 
     return resultados
 
 
-def processar_item(cliente, item):
+def processar_produto_catalogo(cliente, resumo):
     """Roda em thread. Retorna o produto normalizado ou None."""
 
-    item_id = item.get("id")
+    produto_id = resumo.get("id")
 
-    if not item_id or item.get("condition") != "new":
+    if not produto_id:
         return None
 
-    if item.get("available_quantity") == 0:
+    oferta = melhor_oferta_do_produto(cliente, produto_id)
+
+    if not oferta:
         return None
 
-    precos = precos_do_resultado(item) or consultar_preco_item(
-        cliente, item_id
-    )
+    anterior, atual, item_id = oferta
 
-    if not precos:
+    if not validar_precos(resumo.get("name"), anterior, atual):
         return None
 
-    anterior, atual = precos
+    detalhes = cliente.get(f"{API_BASE_URL}/products/{produto_id}")
 
-    if not validar_precos(item.get("title"), anterior, atual):
+    if not detalhes:
         return None
 
-    return normalizar_produto(item, anterior, atual)
+    return normalizar_produto(detalhes, anterior, atual, item_id)
 
 
 # ============================================================
@@ -314,7 +332,7 @@ async def buscar_ofertas_mercado_livre(
     try:
         buscas = await asyncio.gather(
             *(
-                limitado(buscar_itens_por_termo, cliente, termo, limite_por_busca)
+                limitado(buscar_produtos_por_termo, cliente, termo, limite_por_busca)
                 for termo in TERMOS_BUSCA
             )
         )
@@ -330,7 +348,7 @@ async def buscar_ofertas_mercado_livre(
                     itens_unicos.append(item)
 
         resultados = await asyncio.gather(
-            *(limitado(processar_item, cliente, item) for item in itens_unicos)
+            *(limitado(processar_produto_catalogo, cliente, item) for item in itens_unicos)
         )
 
     except AcessoNegado as erro:
