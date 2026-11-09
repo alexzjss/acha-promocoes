@@ -297,13 +297,20 @@ async def processar_produto(bot, produto):
     # 6. SALVAR PRODUTO NO HISTÓRICO
     # ========================================================
 
+    # Chave estável do produto: a URL original (o link de afiliado
+    # pode mudar quando a conversão termina). O Discord usa oferta["url"].
+    chave_url = oferta.get("url_original") or oferta["url"]
+
     salvar_produto(
         nome=oferta["nome"],
         categoria=oferta["categoria"],
         loja=oferta["loja"],
         preco_anterior=preco_anterior,
         preco_atual=preco_atual,
-        url=oferta["url"],
+        url=chave_url,
+        url_afiliado=(
+            oferta["url"] if oferta["url"] != chave_url else None
+        ),
         imagem_url=oferta.get(
             "imagem"
         ),
@@ -334,7 +341,7 @@ async def processar_produto(bot, produto):
     # ========================================================
 
     if oferta_ja_publicada(
-        oferta["url"],
+        chave_url,
         preco_atual
     ):
         print(
@@ -387,7 +394,7 @@ async def processar_produto(bot, produto):
 
     registrar_oferta_publicada(
         nome=oferta["nome"],
-        url=oferta["url"],
+        url=chave_url,
         preco=preco_atual,
         canal_id=canal_id
     )

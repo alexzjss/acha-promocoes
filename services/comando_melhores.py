@@ -136,7 +136,7 @@ def montar_embed(estado, total, linhas):
         linhas, start=pagina * POR_PAGINA + 1
     ):
         blocos.append(
-            f"**{posicao}. [{item['nome'][:90]}]({item['url']})**\n"
+            f"**{posicao}. [{item['nome'][:90]}]({item.get('link') or item['url']})**\n"
             f"🏬 {item['loja']} • ~~{brl(item['preco_anterior'])}~~ → "
             f"**{brl(item['preco_atual'])}**\n"
             f"📉 **{item['desconto_pct']:.1f}% OFF** • "

@@ -50,6 +50,14 @@ def criar_banco():
         )
     """)
 
+    # Migração: link de afiliado publicado (a coluna url guarda a
+    # URL original, usada como chave de histórico e anti-duplicação).
+    try:
+        cursor.execute("ALTER TABLE produtos ADD COLUMN url_afiliado TEXT")
+
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
+
     # Alertas por palavra-chave (comando /alerta)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS alertas (
@@ -141,7 +149,8 @@ def salvar_produto(
     preco_atual,
     url,
     imagem_url=None,
-    score=0
+    score=0,
+    url_afiliado=None
 ):
     conn = conectar()
     cursor = conn.cursor()
@@ -155,9 +164,10 @@ def salvar_produto(
             preco_atual,
             url,
             imagem_url,
-            score
+            score,
+            url_afiliado
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         nome,
         categoria,
@@ -166,7 +176,8 @@ def salvar_produto(
         preco_atual,
         url,
         imagem_url,
-        score
+        score,
+        url_afiliado
     ))
 
     conn.commit()
@@ -284,6 +295,7 @@ def buscar_melhores(
     base = f"""
         FROM (
             SELECT p.*,
+                   COALESCE(p.url_afiliado, p.url) AS link,
                    (p.preco_anterior - p.preco_atual) AS economia,
                    (p.preco_anterior - p.preco_atual)
                        * 100.0 / p.preco_anterior AS desconto_pct,

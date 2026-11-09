@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from services.filtro_tecnologia import encontrar_termo_bloqueado
+
 
 def normalizar_texto(texto):
     texto = str(texto).lower().strip()
@@ -370,6 +372,11 @@ def eh_tecnologia(nome_produto):
     """
 
     nome = normalizar_texto(nome_produto)
+
+    # Lista de bloqueio completa (moda, beleza, casa...) mantida em
+    # services/filtro_tecnologia.py, compartilhada com o coletor do ML.
+    if encontrar_termo_bloqueado(nome_produto):
+        return False
 
     if identificar_categoria(nome_produto) != "outros":
         return True
